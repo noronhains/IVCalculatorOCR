@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Estimador de IV — Legends Z-A</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script src="./ocr-engine.js"></script>
+<style>
+:root{--bg:#0B1030;--panel:#151E4C;--soft:#1D2963;--line:#2E3C82;--text:#E6EBFF;--dim:#8B98D4;--cyan:#54E0F0;--mag:#F2519B;--gold:#FFC94A;--green:#5BE38A}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif;padding:20px}
+.wrap{max-width:920px;margin:0 auto}
+.eyebrow{color:var(--cyan);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+h1{font-size:28px;margin:4px 0 6px}
+p.sub{color:var(--dim);font-size:14px;margin:0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:16px}
+.card.drop{border:1px dashed var(--cyan)}
+label.btn{background:var(--cyan);color:var(--bg);font-weight:700;font-size:14px;padding:10px 16px;border-radius:8px;cursor:pointer;display:inline-block}
+label.btn[aria-disabled=true],button.btn[disabled]{opacity:.5;cursor:wait}
+button.btn{background:var(--cyan);color:var(--bg);font-weight:700;font-size:14px;padding:10px 16px;border-radius:8px;border:0;cursor:pointer;font-family:inherit}
+input,select{background:var(--bg);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:6px 8px;width:100%;font-family:ui-monospace,monospace;font-size:14px}
+input:focus,select:focus{outline:2px solid var(--cyan);outline-offset:1px}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+.f{min-width:150px;flex:1}
+.f small{color:var(--dim);font-size:11px;letter-spacing:.08em;text-transform:uppercase;display:block;margin-bottom:3px}
+.grid{display:grid;grid-template-columns:1.1fr 80px 80px 80px 1.4fr;gap:10px;align-items:center}
+.grid.head{padding:10px 16px;background:var(--soft);color:var(--dim);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+.grid.body{padding:10px 16px;border-top:1px solid var(--line)}
+.table{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-top:16px}
+.iv{font-family:ui-monospace,monospace;font-size:15px}
+.bar{height:5px;background:var(--bg);border-radius:3px;margin-top:5px;position:relative}
+.bar i{position:absolute;height:100%;border-radius:3px;background:var(--cyan)}
+.bar i.perfect{background:var(--gold)}
+.note{font-size:13px;line-height:1.6;color:var(--dim)}
+.err{color:var(--mag);font-size:13px;margin-top:10px}
+.ok{color:var(--green);font-size:13px;margin-top:10px}
+.chk{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--soft);border-radius:6px;cursor:pointer;font-size:13px}
+#raw{width:100%;height:120px;background:var(--bg);color:var(--dim);border:1px solid var(--line);border-radius:6px;font-family:ui-monospace,monospace;font-size:11px;margin-top:10px;display:none;padding:8px}
+@media (max-width:640px){.grid{grid-template-columns:1fr 60px 60px 60px;grid-auto-rows:auto}.grid .ivcell{grid-column:1/-1}}
+@media (prefers-reduced-motion:no-preference){.bar i{transition:left .2s,width .2s}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Legends Z-A</div>
+  <h1>Estimador de IV</h1>
+  <p class="sub">Leitura de tela com PaddleOCR PP-OCRv4 rodando local (WASM). Nada sai do seu navegador.</p>
+
+  <div class="card drop">
+    <div class="row">
+      <label class="btn" id="pickLabel">Escolher imagem
+        <input type="file" accept="image/*" id="file" hidden>
+      </label>
+      <button class="btn" id="camBtn" type="button">Tirar foto agora</button>
+      <button class="btn" id="reReadBtn" type="button" disabled style="background:var(--soft);color:var(--text)">Reler imagem</button>
+      <label class="btn" id="nativeCamLabel" hidden>Abrir câmera
+        <input type="file" accept="image/*" capture="environment" id="nativeCam" hidden>
+      </label>
+      <div class="note" style="flex:1;min-width:220px">Envie a tela do <em>jogo</em>. Se espécie, nível ou natureza saírem errados, corrija abaixo e use "Reler imagem" — os números são validados contra esses campos.</div>
+      <label class="chk"><input type="checkbox" id="showRaw"> Ver texto lido</label>
+    </div>
+    <div id="msg"></div>
+    <textarea id="raw" readonly></textarea>
+  </div>
+
+  <div class="card" id="cropPanel" hidden>
+    <div class="note" style="margin-bottom:10px">Arraste sobre a área da tela do jogo — quanto mais justo ao painel, melhor a leitura.</div>
+    <canvas id="cropCv" style="width:100%;touch-action:none;border-radius:8px;background:#000"></canvas>
+    <div class="row" style="margin-top:12px">
+      <button class="btn" id="cropGo" type="button">Ler área selecionada</button>
+      <button class="btn" id="cropAll" type="button" style="background:var(--soft);color:var(--text)">Usar imagem inteira</button>
+    </div>
+  </div>
+
+  <div class="card" id="camPanel" hidden>
+    <video id="video" autoplay playsinline muted style="width:100%;max-height:60vh;background:#000;border-radius:8px"></video>
+    <div class="row" style="margin-top:12px">
+      <button class="btn" id="shotBtn" type="button">Capturar</button>
+      <button class="btn" id="closeCamBtn" type="button" style="background:var(--soft);color:var(--text)">Fechar</button>
+      <div class="note" style="flex:1;min-width:200px">Encaixe a tela de status inteira no quadro e evite ângulo — texto torto derruba o OCR.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div class="f" style="position:relative">
+        <small>Espécie</small>
+        <input id="species" value="Gastly" placeholder="Nome em inglês" autocomplete="off">
+        <div id="sugg" style="position:absolute;z-index:20;left:0;right:0;background:var(--soft);border:1px solid var(--line);border-radius:6px;margin-top:4px;display:none"></div>
+      </div>
+      <div class="f" style="max-width:90px"><small>Nível</small><input id="level" type="number" min="1" max="100" value="21"></div>
+      <div class="f" style="max-width:150px"><small>Natureza</small><select id="nature"></select></div>
+      <label class="chk"><input type="checkbox" id="alpha" checked> Alpha</label>
+    </div>
+    <div class="note" id="alphaNote" style="margin-top:10px;color:var(--gold)">Alpha garante 3 IVs em 31 e já vem com EV de HP no máximo.</div>
+  </div>
+
+  <div class="table">
+    <div class="grid head"><div>Atributo</div><div>Base</div><div>EV</div><div>Na tela</div><div>IV estimado</div></div>
+    <div id="rows"></div>
+  </div>
+
+  <div class="card note">
+    <div id="summary" style="color:var(--text);font-weight:600;margin-bottom:6px"></div>
+    Quanto maior o nível, mais estreita a faixa. Se o Pokémon já lutou, os EVs mudaram e o resultado sai errado — estime logo depois da captura. O Judge, no pós-jogo, dá a resposta definitiva.
+  </div>
+</div>
+<script>
+window.addEventListener("DOMContentLoaded",function(){
+  if(location.protocol!=="file:") return;
+  var d=document.createElement("div");
+  d.className="card";
+  d.style.borderColor="var(--gold)";
+  d.innerHTML='<div class="note" style="color:var(--gold)">Você abriu o arquivo direto do disco (<code>file://</code>). '+
+    'Deve funcionar assim mesmo, mas se o PP-OCR falhar ao baixar os modelos, sirva por http:<br><br>'+
+    '<code style="color:var(--cyan)">python3 -m http.server 8000</code><br>'+
+    'e abra <code style="color:var(--cyan)">http://localhost:8000/</code> no navegador.</div>';
+  var w=document.querySelector(".wrap");
+  w.insertBefore(d,w.children[3]);
+});
+const DEX=[[1,"Bulbasaur",45,49,49,65,65,45],[2,"Ivysaur",60,62,63,80,80,60],[3,"Venusaur",80,82,83,100,100,80],[4,"Charmander",39,52,43,60,50,65],[5,"Charmeleon",58,64,58,80,65,80],[6,"Charizard",78,84,78,109,85,100],[7,"Squirtle",44,48,65,50,64,43],[8,"Wartortle",59,63,80,65,80,58],[9,"Blastoise",79,83,100,85,105,78],[23,"Ekans",35,60,44,40,54,55],[24,"Arbok",60,95,69,65,79,80],[25,"Pikachu",35,55,40,50,50,90],[25,"Pikachu-Alola",35,55,40,50,50,90],[25,"Pikachu-Hoenn",35,55,40,50,50,90],[25,"Pikachu-Kalos",35,55,40,50,50,90],[25,"Pikachu-Original",35,55,40,50,50,90],[25,"Pikachu-Partner",35,55,40,50,50,90],[25,"Pikachu-Sinnoh",35,55,40,50,50,90],[25,"Pikachu-Unova",35,55,40,50,50,90],[25,"Pikachu-World",35,55,40,50,50,90],[26,"Raichu",60,90,55,90,80,110],[26,"Raichu-Alola",60,85,50,95,85,110],[27,"Sandshrew",50,75,85,20,30,40],[27,"Sandshrew-Alola",50,75,90,10,35,40],[28,"Sandslash",75,100,110,45,55,65],[28,"Sandslash-Alola",75,100,120,25,65,65],[35,"Clefairy",70,45,48,60,65,35],[36,"Clefable",95,70,73,95,90,60],[37,"Vulpix",38,41,40,50,65,65],[37,"Vulpix-Alola",38,41,40,50,65,65],[38,"Ninetales",73,76,75,81,100,100],[38,"Ninetales-Alola",73,67,75,81,100,109],[39,"Jigglypuff",115,45,20,45,25,20],[40,"Wigglytuff",140,70,45,85,50,45],[43,"Oddish",45,50,55,75,65,30],[44,"Gloom",60,65,70,85,75,40],[45,"Vileplume",75,80,85,110,90,50],[48,"Venonat",60,55,50,40,55,45],[49,"Venomoth",70,65,60,90,75,90],[50,"Diglett",10,55,25,35,45,95],[50,"Diglett-Alola",10,55,30,35,45,90],[51,"Dugtrio",35,100,50,50,70,120],[51,"Dugtrio-Alola",35,100,60,50,70,110],[52,"Meowth",40,45,35,40,40,90],[52,"Meowth-Alola",40,35,35,50,40,90],[52,"Meowth-Galar",50,65,55,40,40,40],[53,"Persian",65,70,60,65,65,115],[53,"Persian-Alola",65,60,60,75,65,115],[54,"Psyduck",50,52,48,65,50,55],[55,"Golduck",80,82,78,95,80,85],[56,"Mankey",40,80,35,35,45,70],[57,"Primeape",65,105,60,60,70,95],[58,"Growlithe",55,70,45,70,50,60],[58,"Growlithe-Hisui",60,75,45,65,50,55],[59,"Arcanine",90,110,80,100,80,95],[59,"Arcanine-Hisui",95,115,80,95,80,90],[60,"Poliwag",40,50,40,40,40,90],[61,"Poliwhirl",65,65,65,50,50,90],[62,"Poliwrath",90,95,95,70,90,70],[69,"Bellsprout",50,75,35,70,30,40],[70,"Weepinbell",65,90,50,85,45,55],[71,"Victreebel",80,105,65,100,70,70],[72,"Tentacool",40,40,35,50,100,70],[73,"Tentacruel",80,70,65,80,120,100],[74,"Geodude",40,80,100,30,30,20],[74,"Geodude-Alola",40,80,100,30,30,20],[75,"Graveler",55,95,115,45,45,35],[75,"Graveler-Alola",55,95,115,45,45,35],[76,"Golem",80,120,130,55,65,45],[76,"Golem-Alola",80,120,130,55,65,45],[79,"Slowpoke",90,65,65,40,40,15],[79,"Slowpoke-Galar",90,65,65,40,40,15],[80,"Slowbro",95,75,110,100,80,30],[80,"Slowbro-Galar",95,100,95,100,70,30],[81,"Magnemite",25,35,70,95,55,45],[82,"Magneton",50,60,95,120,70,70],[84,"Doduo",35,85,45,35,35,75],[85,"Dodrio",60,110,70,60,60,110],[86,"Seel",65,45,55,45,70,45],[87,"Dewgong",90,70,80,70,95,70],[88,"Grimer",80,80,50,40,50,25],[88,"Grimer-Alola",80,80,50,40,50,25],[89,"Muk",105,105,75,65,100,50],[89,"Muk-Alola",105,105,75,65,100,50],[90,"Shellder",30,65,100,45,25,40],[91,"Cloyster",50,95,180,85,45,70],[92,"Gastly",30,35,30,100,35,80],[93,"Haunter",45,50,45,115,55,95],[94,"Gengar",60,65,60,130,75,110],[96,"Drowzee",60,48,45,43,90,42],[97,"Hypno",85,73,70,73,115,67],[100,"Voltorb",40,30,50,55,55,100],[100,"Voltorb-Hisui",40,30,50,55,55,100],[101,"Electrode",60,50,70,80,80,150],[101,"Electrode-Hisui",60,50,70,80,80,150],[102,"Exeggcute",60,40,80,60,45,40],[103,"Exeggutor",95,95,85,125,75,55],[103,"Exeggutor-Alola",95,105,85,125,75,45],[106,"Hitmonlee",50,120,53,35,110,87],[107,"Hitmonchan",50,105,79,35,110,76],[109,"Koffing",40,65,95,60,45,35],[110,"Weezing",65,90,120,85,70,60],[110,"Weezing-Galar",65,90,120,85,70,60],[111,"Rhyhorn",80,85,95,30,30,25],[112,"Rhydon",105,130,120,45,45,40],[113,"Chansey",250,5,5,35,105,50],[116,"Horsea",30,40,70,70,25,60],[117,"Seadra",55,65,95,95,45,85],[123,"Scyther",70,110,80,55,80,105],[125,"Electabuzz",65,83,57,95,85,105],[126,"Magmar",65,95,57,100,85,93],[128,"Tauros",75,100,95,40,70,110],[128,"Tauros-Paldea-Aqua",75,110,105,30,70,100],[128,"Tauros-Paldea-Blaze",75,110,105,30,70,100],[128,"Tauros-Paldea-Combat",75,110,105,30,70,100],[129,"Magikarp",20,10,55,15,20,80],[130,"Gyarados",95,125,79,60,100,81],[131,"Lapras",130,85,80,85,95,60],[132,"Ditto",48,48,48,48,48,48],[133,"Eevee",55,55,50,45,65,55],[134,"Vaporeon",130,65,60,110,95,65],[135,"Jolteon",65,65,60,110,95,130],[136,"Flareon",65,130,60,95,110,65],[137,"Porygon",65,60,70,85,75,40],[143,"Snorlax",160,110,65,65,110,30],[144,"Articuno",90,85,100,95,125,85],[144,"Articuno-Galar",90,85,85,125,100,95],[145,"Zapdos",90,90,85,125,90,100],[145,"Zapdos-Galar",90,125,90,85,90,100],[146,"Moltres",90,100,90,125,85,90],[146,"Moltres-Galar",90,85,90,100,125,90],[147,"Dratini",41,64,45,50,50,50],[148,"Dragonair",61,84,65,70,70,70],[149,"Dragonite",91,134,95,100,100,80],[150,"Mewtwo",106,110,90,154,90,130],[151,"Mew",100,100,100,100,100,100],[152,"Chikorita",45,49,65,49,65,45],[153,"Bayleef",60,62,80,63,80,60],[154,"Meganium",80,82,100,83,100,80],[155,"Cyndaquil",39,52,43,60,50,65],[156,"Quilava",58,64,58,80,65,80],[157,"Typhlosion",78,84,78,109,85,100],[157,"Typhlosion-Hisui",73,84,78,119,85,95],[158,"Totodile",50,65,64,44,48,43],[159,"Croconaw",65,80,80,59,63,58],[160,"Feraligatr",85,105,100,79,83,78],[161,"Sentret",35,46,34,35,45,20],[162,"Furret",85,76,64,45,55,90],[163,"Hoothoot",60,30,30,36,56,50],[164,"Noctowl",100,50,50,86,96,70],[167,"Spinarak",40,60,40,40,40,30],[168,"Ariados",70,90,70,60,70,40],[170,"Chinchou",75,38,38,56,56,67],[171,"Lanturn",125,58,58,76,76,67],[172,"Pichu",20,40,15,35,35,60],[173,"Cleffa",50,25,28,45,55,15],[174,"Igglybuff",90,30,15,40,20,15],[179,"Mareep",55,40,40,65,45,35],[180,"Flaaffy",70,55,55,80,60,45],[181,"Ampharos",90,75,85,115,90,55],[182,"Bellossom",75,80,95,90,100,50],[183,"Marill",70,20,50,20,50,40],[184,"Azumarill",100,50,80,60,80,50],[185,"Sudowoodo",70,100,115,30,65,30],[186,"Politoed",90,75,75,90,100,70],[187,"Hoppip",35,35,40,35,55,50],[188,"Skiploom",55,45,50,45,65,80],[189,"Jumpluff",75,55,70,55,95,110],[190,"Aipom",55,70,55,40,55,85],[191,"Sunkern",30,30,30,30,30,30],[192,"Sunflora",75,75,55,105,85,30],[193,"Yanma",65,65,45,75,45,95],[194,"Wooper",55,45,45,25,25,15],[194,"Wooper-Paldea",55,45,45,25,25,15],[195,"Quagsire",95,85,85,65,65,35],[196,"Espeon",65,65,60,130,95,110],[197,"Umbreon",95,65,110,60,130,65],[198,"Murkrow",60,85,42,85,42,91],[199,"Slowking",95,75,80,100,110,30],[199,"Slowking-Galar",95,65,80,110,110,30],[200,"Misdreavus",60,60,60,85,85,85],[203,"Girafarig",70,80,65,90,65,85],[204,"Pineco",50,65,90,35,35,15],[205,"Forretress",75,90,140,60,60,40],[206,"Dunsparce",100,70,70,65,65,45],[207,"Gligar",65,75,105,35,65,85],[209,"Snubbull",60,80,50,40,40,30],[210,"Granbull",90,120,75,60,60,45],[211,"Qwilfish",65,95,85,55,55,85],[211,"Qwilfish-Hisui",65,95,85,55,55,85],[212,"Scizor",70,130,100,55,80,65],[214,"Heracross",80,125,75,40,95,85],[215,"Sneasel",55,95,55,35,75,115],[215,"Sneasel-Hisui",55,95,55,35,75,115],[216,"Teddiursa",60,80,50,50,50,40],[217,"Ursaring",90,130,75,75,75,55],[218,"Slugma",40,40,40,70,40,20],[219,"Magcargo",60,50,120,90,80,30],[220,"Swinub",50,50,40,30,30,50],[221,"Piloswine",100,100,80,60,60,50],[225,"Delibird",45,55,45,65,45,75],[227,"Skarmory",65,80,140,40,70,70],[228,"Houndour",45,60,30,80,50,65],[229,"Houndoom",75,90,50,110,80,95],[230,"Kingdra",75,95,95,95,95,85],[231,"Phanpy",90,60,60,40,40,40],[232,"Donphan",90,120,120,60,60,50],[233,"Porygon2",85,80,90,105,95,60],[234,"Stantler",73,95,62,85,65,85],[235,"Smeargle",55,20,35,20,45,75],[236,"Tyrogue",35,35,35,35,35,35],[237,"Hitmontop",50,95,95,35,110,70],[239,"Elekid",45,63,37,65,55,95],[240,"Magby",45,75,37,70,55,83],[242,"Blissey",255,10,10,75,135,55],[243,"Raikou",90,85,75,115,100,115],[244,"Entei",115,115,85,90,75,100],[245,"Suicune",100,75,115,90,115,85],[246,"Larvitar",50,64,50,45,50,41],[247,"Pupitar",70,84,70,65,70,51],[248,"Tyranitar",100,134,110,95,100,61],[249,"Lugia",106,90,130,90,154,110],[250,"Ho-Oh",106,130,90,110,154,90],[252,"Treecko",40,45,35,65,55,70],[253,"Grovyle",50,65,45,85,65,95],[254,"Sceptile",70,85,65,105,85,120],[255,"Torchic",45,60,40,70,50,45],[256,"Combusken",60,85,60,85,60,55],[257,"Blaziken",80,120,70,110,70,80],[258,"Mudkip",50,70,50,50,50,40],[259,"Marshtomp",70,85,70,60,70,50],[260,"Swampert",100,110,90,85,90,60],[261,"Poochyena",35,55,35,30,30,35],[262,"Mightyena",70,90,70,60,60,70],[270,"Lotad",40,30,30,40,50,30],[271,"Lombre",60,50,50,60,70,50],[272,"Ludicolo",80,70,70,90,100,70],[273,"Seedot",40,40,50,30,30,30],[274,"Nuzleaf",70,70,40,60,40,60],[275,"Shiftry",90,100,60,90,60,80],[278,"Wingull",40,30,30,55,30,85],[279,"Pelipper",60,50,100,95,70,65],[280,"Ralts",28,25,25,45,35,40],[281,"Kirlia",38,35,35,65,55,50],[282,"Gardevoir",68,65,65,125,115,80],[283,"Surskit",40,30,32,50,52,65],[284,"Masquerain",70,60,62,100,82,80],[285,"Shroomish",60,40,60,40,60,35],[286,"Breloom",60,130,80,60,60,70],[287,"Slakoth",60,60,60,35,35,30],[288,"Vigoroth",80,80,80,55,55,90],[289,"Slaking",150,160,100,95,65,100],[296,"Makuhita",72,60,30,20,30,25],[297,"Hariyama",144,120,60,40,60,50],[298,"Azurill",50,20,40,20,40,20],[299,"Nosepass",30,45,135,45,90,30],[302,"Sableye",50,75,75,65,65,50],[307,"Meditite",30,40,55,40,55,60],[308,"Medicham",60,60,75,60,75,80],[311,"Plusle",60,50,40,85,75,95],[312,"Minun",60,40,50,75,85,95],[313,"Volbeat",65,73,75,47,85,85],[314,"Illumise",65,47,75,73,85,85],[316,"Gulpin",70,43,53,43,53,40],[317,"Swalot",100,73,83,73,83,55],[322,"Numel",60,60,40,65,45,35],[323,"Camerupt",70,100,70,105,75,40],[324,"Torkoal",70,85,140,85,70,20],[325,"Spoink",60,25,35,70,80,60],[326,"Grumpig",80,45,65,90,110,80],[328,"Trapinch",45,100,45,45,45,10],[329,"Vibrava",50,70,50,50,50,70],[330,"Flygon",80,100,80,80,80,100],[331,"Cacnea",50,85,40,85,40,35],[332,"Cacturne",70,115,60,115,60,55],[333,"Swablu",45,40,60,40,75,50],[334,"Altaria",75,70,90,70,105,80],[335,"Zangoose",73,115,60,60,60,90],[336,"Seviper",73,100,60,100,60,65],[339,"Barboach",50,48,43,46,41,60],[340,"Whiscash",110,78,73,76,71,60],[341,"Corphish",43,80,65,50,35,35],[342,"Crawdaunt",63,120,85,90,55,55],[349,"Feebas",20,15,20,10,55,80],[350,"Milotic",95,60,79,100,125,81],[353,"Shuppet",44,75,35,63,33,45],[354,"Banette",64,115,65,83,63,65],[355,"Duskull",20,40,90,30,90,25],[356,"Dusclops",40,70,130,60,130,25],[357,"Tropius",99,68,83,72,87,51],[358,"Chimecho",75,50,80,95,90,65],[361,"Snorunt",50,50,50,50,50,50],[362,"Glalie",80,80,80,80,80,80],[370,"Luvdisc",43,30,55,40,65,97],[371,"Bagon",45,75,60,40,30,50],[372,"Shelgon",65,95,100,60,50,50],[373,"Salamence",95,135,80,110,80,100],[374,"Beldum",40,55,80,35,60,30],[375,"Metang",60,75,100,55,80,50],[376,"Metagross",80,135,130,95,90,70],[377,"Regirock",80,100,200,50,100,50],[378,"Regice",80,50,100,100,200,50],[379,"Registeel",80,75,150,75,150,50],[380,"Latias",80,80,90,110,130,110],[381,"Latios",80,90,80,130,110,110],[382,"Kyogre",100,100,90,150,140,90],[383,"Groudon",100,150,140,100,90,90],[384,"Rayquaza",105,150,90,150,90,95],[385,"Jirachi",100,100,100,100,100,100],[386,"Deoxys",50,150,50,150,50,150],[386,"Deoxys-Attack",50,180,20,180,20,150],[386,"Deoxys-Defense",50,70,160,70,160,90],[386,"Deoxys-Speed",50,95,90,95,90,180],[387,"Turtwig",55,68,64,45,55,31],[388,"Grotle",75,89,85,55,65,36],[389,"Torterra",95,109,105,75,85,56],[390,"Chimchar",44,58,44,58,44,61],[391,"Monferno",64,78,52,78,52,81],[392,"Infernape",76,104,71,104,71,108],[393,"Piplup",53,51,53,61,56,40],[394,"Prinplup",64,66,68,81,76,50],[395,"Empoleon",84,86,88,111,101,60],[396,"Starly",40,55,30,30,30,60],[397,"Staravia",55,75,50,40,40,80],[398,"Staraptor",85,120,70,50,60,100],[401,"Kricketot",37,25,41,25,41,25],[402,"Kricketune",77,85,51,55,51,65],[403,"Shinx",45,65,34,40,34,45],[404,"Luxio",60,85,49,60,49,60],[405,"Luxray",80,120,79,95,79,70],[408,"Cranidos",67,125,40,30,30,58],[409,"Rampardos",97,165,60,65,50,58],[410,"Shieldon",30,42,118,42,88,30],[411,"Bastiodon",60,52,168,47,138,30],[415,"Combee",30,30,42,30,42,70],[416,"Vespiquen",70,80,102,80,102,40],[417,"Pachirisu",60,45,70,45,90,95],[418,"Buizel",55,65,35,60,30,85],[419,"Floatzel",85,105,55,85,50,115],[422,"Shellos",76,48,48,57,62,34],[422,"Shellos-East",76,48,48,57,62,34],[423,"Gastrodon",111,83,68,92,82,39],[423,"Gastrodon-East",111,83,68,92,82,39],[424,"Ambipom",75,100,66,60,66,115],[425,"Drifloon",90,50,34,60,44,70],[426,"Drifblim",150,80,44,90,54,80],[429,"Mismagius",60,60,60,105,105,105],[430,"Honchkrow",100,125,52,105,52,71],[433,"Chingling",45,30,50,65,50,45],[434,"Stunky",63,63,47,41,41,74],[435,"Skuntank",103,93,67,71,61,84],[436,"Bronzor",57,24,86,24,86,23],[437,"Bronzong",67,89,116,79,116,33],[438,"Bonsly",50,80,95,10,45,10],[440,"Happiny",100,5,5,15,65,30],[442,"Spiritomb",50,92,108,92,108,35],[443,"Gible",58,70,45,40,45,42],[444,"Gabite",68,90,65,50,55,82],[445,"Garchomp",108,130,95,80,85,102],[446,"Munchlax",135,85,40,40,85,5],[447,"Riolu",40,70,40,35,40,60],[448,"Lucario",70,110,70,115,70,90],[449,"Hippopotas",68,72,78,38,42,32],[450,"Hippowdon",108,112,118,68,72,47],[453,"Croagunk",48,61,40,61,40,50],[454,"Toxicroak",83,106,65,86,65,85],[456,"Finneon",49,49,56,49,61,66],[457,"Lumineon",69,69,76,69,86,91],[459,"Snover",60,62,50,62,60,40],[460,"Abomasnow",90,92,75,92,85,60],[461,"Weavile",70,120,65,45,85,125],[462,"Magnezone",70,70,115,130,90,60],[464,"Rhyperior",115,140,130,55,55,40],[466,"Electivire",75,123,67,95,85,95],[467,"Magmortar",75,95,67,125,95,83],[469,"Yanmega",86,76,86,116,56,95],[470,"Leafeon",65,110,130,60,65,95],[471,"Glaceon",65,60,110,130,95,65],[472,"Gliscor",75,95,125,45,75,95],[473,"Mamoswine",110,130,80,70,60,80],[474,"Porygon-Z",85,80,70,135,75,90],[475,"Gallade",68,125,65,65,115,80],[476,"Probopass",60,55,145,75,150,40],[477,"Dusknoir",45,100,135,65,135,45],[478,"Froslass",70,80,70,80,70,110],[479,"Rotom",50,50,77,95,77,91],[479,"Rotom-Fan",50,65,107,105,107,86],[479,"Rotom-Frost",50,65,107,105,107,86],[479,"Rotom-Heat",50,65,107,105,107,86],[479,"Rotom-Mow",50,65,107,105,107,86],[479,"Rotom-Wash",50,65,107,105,107,86],[480,"Uxie",75,75,130,75,130,95],[481,"Mesprit",80,105,105,105,105,80],[482,"Azelf",75,125,70,125,70,115],[483,"Dialga",100,120,120,150,100,90],[483,"Dialga-Origin",100,100,120,150,120,90],[484,"Palkia",90,120,100,150,120,100],[484,"Palkia-Origin",90,100,100,150,120,120],[485,"Heatran",91,90,106,130,106,77],[486,"Regigigas",110,160,110,80,110,100],[487,"Giratina",150,100,120,100,120,90],[487,"Giratina-Origin",150,120,100,120,100,90],[488,"Cresselia",120,70,110,75,120,85],[489,"Phione",80,80,80,80,80,80],[490,"Manaphy",100,100,100,100,100,100],[491,"Darkrai",70,90,90,135,90,125],[492,"Shaymin",100,100,100,100,100,100],[492,"Shaymin-Sky",100,103,75,120,75,127],[493,"Arceus",120,120,120,120,120,120],[493,"Arceus-Bug",120,120,120,120,120,120],[493,"Arceus-Dark",120,120,120,120,120,120],[493,"Arceus-Dragon",120,120,120,120,120,120],[493,"Arceus-Electric",120,120,120,120,120,120],[493,"Arceus-Fairy",120,120,120,120,120,120],[493,"Arceus-Fighting",120,120,120,120,120,120],[493,"Arceus-Fire",120,120,120,120,120,120],[493,"Arceus-Flying",120,120,120,120,120,120],[493,"Arceus-Ghost",120,120,120,120,120,120],[493,"Arceus-Grass",120,120,120,120,120,120],[493,"Arceus-Ground",120,120,120,120,120,120],[493,"Arceus-Ice",120,120,120,120,120,120],[493,"Arceus-Poison",120,120,120,120,120,120],[493,"Arceus-Psychic",120,120,120,120,120,120],[493,"Arceus-Rock",120,120,120,120,120,120],[493,"Arceus-Steel",120,120,120,120,120,120],[493,"Arceus-Water",120,120,120,120,120,120],[495,"Snivy",45,45,55,45,55,63],[496,"Servine",60,60,75,60,75,83],[497,"Serperior",75,75,95,75,95,113],[498,"Tepig",65,63,45,45,45,45],[499,"Pignite",90,93,55,70,55,55],[500,"Emboar",110,123,65,100,65,65],[501,"Oshawott",55,55,45,63,45,45],[502,"Dewott",75,75,60,83,60,60],[503,"Samurott",95,100,85,108,70,70],[503,"Samurott-Hisui",90,108,80,100,65,85],[522,"Blitzle",45,60,32,50,32,76],[523,"Zebstrika",75,100,63,80,63,116],[529,"Drilbur",60,85,40,30,45,68],[530,"Excadrill",110,135,60,50,65,88],[532,"Timburr",75,80,55,25,35,35],[533,"Gurdurr",85,105,85,40,50,40],[534,"Conkeldurr",105,140,95,55,65,45],[540,"Sewaddle",45,53,70,40,60,42],[541,"Swadloon",55,63,90,50,80,42],[542,"Leavanny",75,103,80,70,80,92],[546,"Cottonee",40,27,60,37,50,66],[547,"Whimsicott",60,67,85,77,75,116],[548,"Petilil",45,35,50,70,50,30],[549,"Lilligant",70,60,75,110,75,90],[549,"Lilligant-Hisui",70,105,75,50,75,105],[550,"Basculin",70,92,65,80,55,98],[550,"Basculin-Blue-Striped",70,92,65,80,55,98],[550,"Basculin-White-Striped",70,92,65,80,55,98],[551,"Sandile",50,72,35,35,35,65],[552,"Krokorok",60,82,45,45,45,74],[553,"Krookodile",95,117,80,65,70,92],[559,"Scraggy",50,75,70,35,70,48],[560,"Scrafty",65,90,115,45,115,58],[570,"Zorua",40,65,40,80,40,65],[570,"Zorua-Hisui",35,60,40,85,40,70],[571,"Zoroark",60,105,60,120,60,105],[571,"Zoroark-Hisui",55,100,60,125,60,110],[572,"Minccino",55,50,40,40,40,75],[573,"Cinccino",75,95,60,65,60,115],[574,"Gothita",45,30,50,55,65,45],[575,"Gothorita",60,45,70,75,85,55],[576,"Gothitelle",70,55,95,95,110,65],[577,"Solosis",45,30,40,105,50,20],[578,"Duosion",65,40,50,125,60,30],[579,"Reuniclus",110,65,75,125,85,30],[580,"Ducklett",62,44,50,44,50,55],[581,"Swanna",75,87,63,87,63,98],[585,"Deerling",60,60,50,40,50,75],[585,"Deerling-Autumn",60,60,50,40,50,75],[585,"Deerling-Summer",60,60,50,40,50,75],[585,"Deerling-Winter",60,60,50,40,50,75],[586,"Sawsbuck",80,100,70,60,70,95],[590,"Foongus",69,55,45,55,55,15],[591,"Amoonguss",114,85,70,85,80,30],[594,"Alomomola",165,75,80,40,45,65],[595,"Joltik",50,47,50,57,50,65],[596,"Galvantula",70,77,60,97,60,108],[602,"Tynamo",35,55,40,45,40,60],[603,"Eelektrik",65,85,70,75,70,40],[604,"Eelektross",85,115,80,105,80,50],[607,"Litwick",50,30,55,65,55,20],[608,"Lampent",60,40,60,95,60,55],[609,"Chandelure",60,55,90,145,90,80],[610,"Axew",46,87,60,30,40,57],[611,"Fraxure",66,117,70,40,50,67],[612,"Haxorus",76,147,90,60,70,97],[613,"Cubchoo",55,70,40,60,40,40],[614,"Beartic",95,130,80,70,80,50],[615,"Cryogonal",80,50,50,95,135,105],[619,"Mienfoo",45,85,50,55,50,65],[620,"Mienshao",65,125,60,95,60,105],[622,"Golett",59,74,50,35,50,35],[623,"Golurk",89,124,80,55,80,55],[624,"Pawniard",45,85,70,40,40,60],[625,"Bisharp",65,125,100,60,70,70],[627,"Rufflet",70,83,50,37,50,60],[628,"Braviary",100,123,75,57,75,80],[628,"Braviary-Hisui",110,83,70,112,70,65],[629,"Vullaby",70,55,75,45,65,60],[630,"Mandibuzz",110,65,105,55,95,80],[633,"Deino",52,65,50,45,50,38],[634,"Zweilous",72,85,70,65,70,58],[635,"Hydreigon",92,105,90,125,90,98],[636,"Larvesta",55,85,55,50,55,60],[637,"Volcarona",85,60,65,135,105,100],[638,"Cobalion",91,90,129,90,72,108],[639,"Terrakion",91,129,90,72,90,108],[640,"Virizion",91,90,72,90,129,108],[641,"Tornadus",79,115,70,125,80,111],[641,"Tornadus-Therian",79,100,80,110,90,121],[642,"Thundurus",79,115,70,125,80,111],[642,"Thundurus-Therian",79,105,70,145,80,101],[643,"Reshiram",100,120,100,150,120,90],[644,"Zekrom",100,150,120,120,100,90],[645,"Landorus",89,125,90,115,80,101],[645,"Landorus-Therian",89,145,90,105,80,91],[646,"Kyurem",125,130,90,130,90,95],[646,"Kyurem-Black",125,170,100,120,90,95],[646,"Kyurem-White",125,120,90,170,100,95],[647,"Keldeo",91,72,90,129,90,108],[647,"Keldeo-Resolute",91,72,90,129,90,108],[648,"Meloetta",100,77,77,128,128,90],[648,"Meloetta-Pirouette",100,128,90,77,77,128],[650,"Chespin",56,61,65,48,45,38],[651,"Quilladin",61,78,95,56,58,57],[652,"Chesnaught",88,107,122,74,75,64],[653,"Fennekin",40,45,40,62,60,60],[654,"Braixen",59,59,58,90,70,73],[655,"Delphox",75,69,72,114,100,104],[656,"Froakie",41,56,40,62,44,71],[657,"Frogadier",54,63,52,83,56,97],[658,"Greninja",72,95,67,103,71,122],[658,"Greninja-Bond",72,95,67,103,71,122],[661,"Fletchling",45,50,43,40,38,62],[662,"Fletchinder",62,73,55,56,52,84],[663,"Talonflame",78,81,71,74,69,126],[664,"Scatterbug",38,35,40,27,25,35],[665,"Spewpa",45,22,60,27,30,29],[666,"Vivillon",80,52,50,90,50,89],[666,"Vivillon-Archipelago",80,52,50,90,50,89],[666,"Vivillon-Continental",80,52,50,90,50,89],[666,"Vivillon-Elegant",80,52,50,90,50,89],[666,"Vivillon-Fancy",80,52,50,90,50,89],[666,"Vivillon-Garden",80,52,50,90,50,89],[666,"Vivillon-High Plains",80,52,50,90,50,89],[666,"Vivillon-Icy Snow",80,52,50,90,50,89],[666,"Vivillon-Jungle",80,52,50,90,50,89],[666,"Vivillon-Marine",80,52,50,90,50,89],[666,"Vivillon-Modern",80,52,50,90,50,89],[666,"Vivillon-Monsoon",80,52,50,90,50,89],[666,"Vivillon-Ocean",80,52,50,90,50,89],[666,"Vivillon-Pokeball",80,52,50,90,50,89],[666,"Vivillon-Polar",80,52,50,90,50,89],[666,"Vivillon-River",80,52,50,90,50,89],[666,"Vivillon-Sandstorm",80,52,50,90,50,89],[666,"Vivillon-Savanna",80,52,50,90,50,89],[666,"Vivillon-Sun",80,52,50,90,50,89],[666,"Vivillon-Tundra",80,52,50,90,50,89],[667,"Litleo",62,50,58,73,54,72],[668,"Pyroar",86,68,72,109,66,106],[669,"Flabe\u0301be\u0301",44,38,39,61,79,42],[670,"Floette",54,45,47,75,98,52],[671,"Florges",78,65,68,112,154,75],[672,"Skiddo",66,65,48,62,57,52],[673,"Gogoat",123,100,62,97,81,68],[677,"Espurr",62,48,54,63,60,68],[678,"Meowstic",74,48,76,83,81,104],[678,"Meowstic-F",74,48,76,83,81,104],[686,"Inkay",53,54,53,37,46,45],[687,"Malamar",86,92,88,68,75,73],[690,"Skrelp",50,60,60,60,60,30],[691,"Dragalge",65,75,90,97,123,44],[692,"Clauncher",50,53,62,58,63,44],[693,"Clawitzer",71,73,88,120,89,59],[700,"Sylveon",95,65,65,110,130,60],[701,"Hawlucha",78,92,75,74,63,118],[702,"Dedenne",67,58,57,81,67,101],[703,"Carbink",50,50,150,50,150,50],[704,"Goomy",45,50,35,55,75,40],[705,"Sliggoo",68,75,53,83,113,60],[705,"Sliggoo-Hisui",58,75,83,83,113,40],[706,"Goodra",90,100,70,110,150,80],[706,"Goodra-Hisui",80,100,100,110,150,60],[707,"Klefki",57,80,91,80,87,75],[708,"Phantump",43,70,48,50,60,38],[709,"Trevenant",85,110,76,65,82,56],[712,"Bergmite",55,69,85,32,35,28],[713,"Avalugg",95,117,184,44,46,28],[713,"Avalugg-Hisui",95,127,184,34,36,38],[714,"Noibat",40,30,35,45,40,55],[715,"Noivern",85,70,80,97,80,123],[719,"Diancie",50,100,150,100,150,50],[720,"Hoopa",80,110,60,150,130,70],[720,"Hoopa-Unbound",80,160,60,170,130,80],[721,"Volcanion",80,110,120,130,90,70],[722,"Rowlet",68,55,55,50,50,42],[723,"Dartrix",78,75,75,70,70,52],[724,"Decidueye",78,107,75,100,100,70],[724,"Decidueye-Hisui",88,112,80,95,95,60],[725,"Litten",45,65,40,60,40,70],[726,"Torracat",65,85,50,80,50,90],[727,"Incineroar",95,115,90,80,90,60],[728,"Popplio",50,54,54,66,56,40],[729,"Brionne",60,69,69,91,81,50],[730,"Primarina",80,74,74,126,116,60],[731,"Pikipek",35,75,30,30,30,65],[732,"Trumbeak",55,85,50,40,50,75],[733,"Toucannon",80,120,75,75,75,60],[734,"Yungoos",48,70,30,30,30,45],[735,"Gumshoos",88,110,60,55,60,45],[736,"Grubbin",47,62,45,55,45,46],[737,"Charjabug",57,82,95,55,75,36],[738,"Vikavolt",77,70,90,145,75,43],[739,"Crabrawler",47,82,57,42,47,63],[740,"Crabominable",97,132,77,62,67,43],[741,"Oricorio",75,70,70,98,70,93],[741,"Oricorio-Pa'u",75,70,70,98,70,93],[741,"Oricorio-Pom-Pom",75,70,70,98,70,93],[741,"Oricorio-Sensu",75,70,70,98,70,93],[742,"Cutiefly",40,45,40,55,40,84],[743,"Ribombee",60,55,60,95,70,124],[744,"Rockruff",45,65,40,30,40,60],[744,"Rockruff-Dusk",45,65,40,30,40,60],[745,"Lycanroc",75,115,65,55,65,112],[745,"Lycanroc-Dusk",75,117,65,55,65,110],[745,"Lycanroc-Midnight",85,115,75,55,75,82],[747,"Mareanie",50,53,62,43,52,45],[748,"Toxapex",50,63,152,53,142,35],[749,"Mudbray",70,100,70,45,55,45],[750,"Mudsdale",100,125,100,55,85,35],[751,"Dewpider",38,40,52,40,72,27],[752,"Araquanid",68,70,92,50,132,42],[753,"Fomantis",40,55,35,50,35,35],[754,"Lurantis",70,105,90,80,90,45],[757,"Salandit",48,44,40,71,40,77],[758,"Salazzle",68,64,60,111,60,117],[761,"Bounsweet",42,30,38,30,38,32],[762,"Steenee",52,40,48,40,48,62],[763,"Tsareena",72,120,98,50,98,72],[764,"Comfey",51,52,90,82,110,100],[765,"Oranguru",90,60,80,90,110,60],[766,"Passimian",100,120,90,40,60,80],[769,"Sandygast",55,55,80,70,45,15],[770,"Palossand",85,75,110,100,75,35],[774,"Minior",60,100,60,100,60,120],[774,"Minior-Blue",60,100,60,100,60,120],[774,"Minior-Green",60,100,60,100,60,120],[774,"Minior-Indigo",60,100,60,100,60,120],[774,"Minior-Meteor",60,60,100,60,100,60],[774,"Minior-Orange",60,100,60,100,60,120],[774,"Minior-Violet",60,100,60,100,60,120],[774,"Minior-Yellow",60,100,60,100,60,120],[775,"Komala",65,115,65,75,95,65],[778,"Mimikyu",55,90,80,50,105,96],[778,"Mimikyu-Busted",55,90,80,50,105,96],[779,"Bruxish",68,105,70,70,70,92],[782,"Jangmo-o",45,55,65,45,45,45],[783,"Hakamo-o",55,75,90,65,70,65],[784,"Kommo-o",75,110,125,100,105,85],[789,"Cosmog",43,29,31,29,31,37],[790,"Cosmoem",43,29,131,29,131,37],[791,"Solgaleo",137,137,107,113,89,97],[792,"Lunala",137,113,89,137,107,97],[800,"Necrozma",97,107,101,127,89,79],[800,"Necrozma-Dawn-Wings",97,113,109,157,127,77],[800,"Necrozma-Dusk-Mane",97,157,127,113,109,77],[801,"Magearna",80,95,115,130,115,65],[801,"Magearna-Original",80,95,115,130,115,65],[810,"Grookey",50,65,50,40,40,65],[811,"Thwackey",70,85,70,55,60,80],[812,"Rillaboom",100,125,90,60,70,85],[813,"Scorbunny",50,71,40,40,40,69],[814,"Raboot",65,86,60,55,60,94],[815,"Cinderace",80,116,75,65,75,119],[816,"Sobble",50,40,40,70,40,70],[817,"Drizzile",65,60,55,95,55,90],[818,"Inteleon",70,85,65,125,65,120],[819,"Skwovet",70,55,55,35,35,25],[820,"Greedent",120,95,95,55,75,20],[821,"Rookidee",38,47,35,33,35,57],[822,"Corvisquire",68,67,55,43,55,77],[823,"Corviknight",98,87,105,53,85,67],[833,"Chewtle",50,64,50,38,38,44],[834,"Drednaw",90,115,90,48,68,74],[837,"Rolycoly",30,40,50,40,50,30],[838,"Carkol",80,60,90,60,70,50],[839,"Coalossal",110,80,120,80,90,30],[840,"Applin",40,40,80,40,40,20],[841,"Flapple",70,110,80,95,60,70],[842,"Appletun",110,85,80,100,80,30],[843,"Silicobra",52,57,75,35,50,46],[844,"Sandaconda",72,107,125,65,70,71],[845,"Cramorant",70,85,55,85,95,85],[845,"Cramorant-Gorging",70,85,55,85,95,85],[845,"Cramorant-Gulping",70,85,55,85,95,85],[846,"Arrokuda",41,63,40,40,30,66],[847,"Barraskewda",61,123,60,60,50,136],[848,"Toxel",40,38,35,54,35,40],[849,"Toxtricity",75,98,70,114,70,75],[849,"Toxtricity-Low-Key",75,98,70,114,70,75],[854,"Sinistea",40,45,45,74,54,50],[854,"Sinistea-Antique",40,45,45,74,54,50],[855,"Polteageist",60,65,65,134,114,70],[855,"Polteageist-Antique",60,65,65,134,114,70],[856,"Hatenna",42,30,45,56,53,39],[857,"Hattrem",57,40,65,86,73,49],[858,"Hatterene",57,90,95,136,103,29],[859,"Impidimp",45,45,30,55,40,50],[860,"Morgrem",65,60,45,75,55,70],[861,"Grimmsnarl",95,120,65,95,75,60],[863,"Perrserker",70,110,100,50,60,50],[868,"Milcery",45,40,40,50,61,34],[869,"Alcremie",65,60,75,110,121,64],[869,"Alcremie-Caramel-Swirl",65,60,75,110,121,64],[869,"Alcremie-Lemon-Cream",65,60,75,110,121,64],[869,"Alcremie-Matcha-Cream",65,60,75,110,121,64],[869,"Alcremie-Mint-Cream",65,60,75,110,121,64],[869,"Alcremie-Rainbow-Swirl",65,60,75,110,121,64],[869,"Alcremie-Ruby-Cream",65,60,75,110,121,64],[869,"Alcremie-Ruby-Swirl",65,60,75,110,121,64],[870,"Falinks",65,100,100,70,60,75],[871,"Pincurchin",48,101,95,91,85,15],[872,"Snom",30,25,35,45,30,20],[873,"Frosmoth",70,65,60,125,90,65],[874,"Stonjourner",100,125,135,20,20,70],[875,"Eiscue",75,80,110,65,90,50],[875,"Eiscue-Noice",75,80,70,65,50,130],[876,"Indeedee",60,65,55,105,95,95],[876,"Indeedee-F",70,55,65,95,105,85],[877,"Morpeko",58,95,58,70,58,97],[877,"Morpeko-Hangry",58,95,58,70,58,97],[878,"Cufant",72,80,49,40,49,40],[879,"Copperajah",122,130,69,80,69,30],[884,"Duraludon",70,95,115,120,50,85],[885,"Dreepy",28,60,30,40,30,82],[886,"Drakloak",68,80,50,60,50,102],[887,"Dragapult",88,120,75,100,75,142],[888,"Zacian",92,120,115,80,115,138],[888,"Zacian-Crowned",92,150,115,80,115,148],[889,"Zamazenta",92,120,115,80,115,138],[889,"Zamazenta-Crowned",92,120,140,80,140,128],[890,"Eternatus",140,85,95,145,95,130],[891,"Kubfu",60,90,60,53,50,72],[892,"Urshifu",100,130,100,63,60,97],[892,"Urshifu-Rapid-Strike",100,130,100,63,60,97],[893,"Zarude",105,120,105,70,95,105],[893,"Zarude-Dada",105,120,105,70,95,105],[894,"Regieleki",80,100,50,100,50,200],[895,"Regidrago",200,100,50,100,50,80],[896,"Glastrier",100,145,130,65,110,30],[897,"Spectrier",100,65,60,145,80,130],[898,"Calyrex",100,80,80,80,80,80],[898,"Calyrex-Ice",100,165,150,85,130,50],[898,"Calyrex-Shadow",100,85,80,165,100,150],[899,"Wyrdeer",103,105,72,105,75,65],[900,"Kleavor",70,135,95,45,70,85],[901,"Ursaluna",130,140,105,45,80,50],[901,"Ursaluna-Bloodmoon",113,70,120,135,65,52],[902,"Basculegion",120,112,65,80,75,78],[902,"Basculegion-F",120,92,65,100,75,78],[903,"Sneasler",80,130,60,40,80,120],[904,"Overqwil",85,115,95,65,65,85],[905,"Enamorus",74,115,70,135,80,106],[905,"Enamorus-Therian",74,115,110,135,100,46],[906,"Sprigatito",40,61,54,45,45,65],[907,"Floragato",61,80,63,60,63,83],[908,"Meowscarada",76,110,70,81,70,123],[909,"Fuecoco",67,45,59,63,40,36],[910,"Crocalor",81,55,78,90,58,49],[911,"Skeledirge",104,75,100,110,75,66],[912,"Quaxly",55,65,45,50,45,50],[913,"Quaxwell",70,85,65,65,60,65],[914,"Quaquaval",85,120,80,85,75,85],[915,"Lechonk",54,45,40,35,45,35],[916,"Oinkologne",110,100,75,59,80,65],[916,"Oinkologne-F",115,90,70,59,90,65],[917,"Tarountula",35,41,45,29,40,20],[918,"Spidops",60,79,92,52,86,35],[919,"Nymble",33,46,40,21,25,45],[920,"Lokix",71,102,78,52,55,92],[921,"Pawmi",45,50,20,40,25,60],[922,"Pawmo",60,75,40,50,40,85],[923,"Pawmot",70,115,70,70,60,105],[924,"Tandemaus",50,50,45,40,45,75],[925,"Maushold",74,75,70,65,75,111],[925,"Maushold-Four",74,75,70,65,75,111],[926,"Fidough",37,55,70,30,55,65],[927,"Dachsbun",57,80,115,50,80,95],[928,"Smoliv",41,35,45,58,51,30],[929,"Dolliv",52,53,60,78,78,33],[930,"Arboliva",78,69,90,125,109,39],[931,"Squawkabilly",82,96,51,45,51,92],[931,"Squawkabilly-Blue",82,96,51,45,51,92],[931,"Squawkabilly-White",82,96,51,45,51,92],[931,"Squawkabilly-Yellow",82,96,51,45,51,92],[932,"Nacli",55,55,75,35,35,25],[933,"Naclstack",60,60,100,35,65,35],[934,"Garganacl",100,100,130,45,90,35],[935,"Charcadet",40,50,40,50,40,35],[936,"Armarouge",85,60,100,125,80,75],[937,"Ceruledge",75,125,80,60,100,85],[938,"Tadbulb",61,31,41,59,35,45],[939,"Bellibolt",109,64,91,103,83,45],[940,"Wattrel",40,40,35,55,40,70],[941,"Kilowattrel",70,70,60,105,60,125],[942,"Maschiff",60,78,60,40,51,51],[943,"Mabosstiff",80,120,90,60,70,85],[944,"Shroodle",40,65,35,40,35,75],[945,"Grafaiai",63,95,65,80,72,110],[946,"Bramblin",40,65,30,45,35,60],[947,"Brambleghast",55,115,70,80,70,90],[948,"Toedscool",40,40,35,50,100,70],[949,"Toedscruel",80,70,65,80,120,100],[950,"Klawf",70,100,115,35,55,75],[951,"Capsakid",50,62,40,62,40,50],[952,"Scovillain",65,108,65,108,65,75],[953,"Rellor",41,50,60,31,58,30],[954,"Rabsca",75,50,85,115,100,45],[955,"Flittle",30,35,30,55,30,75],[956,"Espathra",95,60,60,101,60,105],[957,"Tinkatink",50,45,45,35,64,58],[958,"Tinkatuff",65,55,55,45,82,78],[959,"Tinkaton",85,75,77,70,105,94],[960,"Wiglett",10,55,25,35,25,95],[961,"Wugtrio",35,100,50,50,70,120],[962,"Bombirdier",70,103,85,60,85,82],[963,"Finizen",70,45,40,45,40,75],[964,"Palafin",100,70,72,53,62,100],[964,"Palafin-Hero",100,160,97,106,87,100],[965,"Varoom",45,70,63,30,45,47],[966,"Revavroom",80,119,90,54,67,90],[967,"Cyclizar",70,95,65,85,65,121],[968,"Orthworm",70,85,145,60,55,65],[969,"Glimmet",48,35,42,105,60,60],[970,"Glimmora",83,55,90,130,81,86],[971,"Greavard",50,61,60,30,55,34],[972,"Houndstone",72,101,100,50,97,68],[973,"Flamigo",82,115,74,75,64,90],[974,"Cetoddle",108,68,45,30,40,43],[975,"Cetitan",170,113,65,45,55,73],[976,"Veluza",90,102,73,78,65,70],[977,"Dondozo",150,100,115,65,65,35],[978,"Tatsugiri",68,50,60,120,95,82],[978,"Tatsugiri-Droopy",68,50,60,120,95,82],[978,"Tatsugiri-Stretchy",68,50,60,120,95,82],[979,"Annihilape",110,115,80,50,90,90],[980,"Clodsire",130,75,60,45,100,20],[981,"Farigiraf",120,90,70,110,70,60],[982,"Dudunsparce",125,100,80,85,75,55],[982,"Dudunsparce-Three-Segment",125,100,80,85,75,55],[983,"Kingambit",100,135,120,60,85,50],[984,"Great Tusk",115,131,131,53,53,87],[985,"Scream Tail",115,65,99,65,115,111],[986,"Brute Bonnet",111,127,99,79,99,55],[987,"Flutter Mane",55,55,55,135,135,135],[988,"Slither Wing",85,135,79,85,105,81],[989,"Sandy Shocks",85,81,97,121,85,101],[990,"Iron Treads",90,112,120,72,70,106],[991,"Iron Bundle",56,80,114,124,60,136],[992,"Iron Hands",154,140,108,50,68,50],[993,"Iron Jugulis",94,80,86,122,80,108],[994,"Iron Moth",80,70,60,140,110,110],[995,"Iron Thorns",100,134,110,70,84,72],[996,"Frigibax",65,75,45,35,45,55],[997,"Arctibax",90,95,66,45,65,62],[998,"Baxcalibur",115,145,92,75,86,87],[999,"Gimmighoul",45,30,70,75,70,10],[999,"Gimmighoul-Roaming",45,30,25,75,45,80],[1000,"Gholdengo",87,60,95,133,91,84],[1001,"Wo-Chien",85,85,100,95,135,70],[1002,"Chien-Pao",80,120,80,90,65,135],[1003,"Ting-Lu",155,110,125,55,80,45],[1004,"Chi-Yu",55,80,80,135,120,100],[1005,"Roaring Moon",105,139,71,55,101,119],[1006,"Iron Valiant",74,130,90,120,60,116],[1007,"Koraidon",100,135,115,85,100,135],[1008,"Miraidon",100,85,100,135,115,135],[1009,"Walking Wake",99,83,91,125,83,109],[1010,"Iron Leaves",90,130,88,70,108,104],[1011,"Dipplin",80,80,110,95,80,40],[1012,"Poltchageist",40,45,45,74,54,50],[1012,"Poltchageist-Artisan",40,45,45,74,54,50],[1013,"Sinistcha",71,60,106,121,80,70],[1013,"Sinistcha-Masterpiece",71,60,106,121,80,70],[1014,"Okidogi",88,128,115,58,86,80],[1015,"Munkidori",88,75,66,130,90,106],[1016,"Fezandipiti",88,91,82,70,125,99],[1017,"Ogerpon",80,120,84,60,96,110],[1017,"Ogerpon-Cornerstone",80,120,84,60,96,110],[1017,"Ogerpon-Cornerstone-Tera",80,120,84,60,96,110],[1017,"Ogerpon-Hearthflame",80,120,84,60,96,110],[1017,"Ogerpon-Hearthflame-Tera",80,120,84,60,96,110],[1017,"Ogerpon-Teal-Tera",80,120,84,60,96,110],[1017,"Ogerpon-Wellspring",80,120,84,60,96,110],[1017,"Ogerpon-Wellspring-Tera",80,120,84,60,96,110],[1018,"Archaludon",90,105,130,125,65,85],[1019,"Hydrapple",106,80,110,120,80,44],[1020,"Gouging Fire",105,115,121,65,93,91],[1021,"Raging Bolt",125,73,91,137,89,75],[1022,"Iron Boulder",90,120,80,68,108,124],[1023,"Iron Crown",90,72,100,122,108,98],[1024,"Terapagos",90,65,85,65,85,60],[1024,"Terapagos-Stellar",160,105,110,130,110,85],[1024,"Terapagos-Terastal",95,95,110,105,110,85],[1025,"Pecharunt",88,88,160,88,88,88]];
+const STATS=[["hp","HP"],["atk","Attack"],["def","Defense"],["spa","Sp. Atk"],["spd","Sp. Def"],["spe","Speed"]];
+const NATURES={Hardy:{},Docile:{},Serious:{},Bashful:{},Quirky:{},
+Lonely:{atk:1.1,def:.9},Brave:{atk:1.1,spe:.9},Adamant:{atk:1.1,spa:.9},Naughty:{atk:1.1,spd:.9},
+Bold:{def:1.1,atk:.9},Relaxed:{def:1.1,spe:.9},Impish:{def:1.1,spa:.9},Lax:{def:1.1,spd:.9},
+Timid:{spe:1.1,atk:.9},Hasty:{spe:1.1,def:.9},Jolly:{spe:1.1,spa:.9},Naive:{spe:1.1,spd:.9},
+Modest:{spa:1.1,atk:.9},Mild:{spa:1.1,def:.9},Quiet:{spa:1.1,spe:.9},Rash:{spa:1.1,spd:.9},
+Calm:{spd:1.1,atk:.9},Gentle:{spd:1.1,def:.9},Sassy:{spd:1.1,spe:.9},Careful:{spd:1.1,spa:.9}};
+
+const DEX_MAP={};
+for(const [num,name,hp,atk,def,spa,spd,spe] of DEX) DEX_MAP[name]={hp,atk,def,spa,spd,spe};
+
+const state={
+  level:21,nature:"Brave",species:"Gastly",alpha:true,
+  base:{...DEX_MAP.Gastly},
+  ev:{hp:252,atk:0,def:0,spa:0,spd:0,spe:0},
+  obs:{hp:58,atk:28,def:24,spa:49,spd:24,spe:40}
+};
+
+const $=id=>document.getElementById(id);
+
+function calcStat(key,base,iv,ev,level,mod){
+  const c=Math.floor(((2*base+iv+Math.floor(ev/4))*level)/100);
+  return key==="hp" ? c+level+10 : Math.floor((c+5)*mod);
+}
+
+function solve(){
+  const mods=NATURES[state.nature]||{};
+  return STATS.map(([key,label])=>{
+    if(state.obs[key]===""||state.obs[key]==null) return {key,label,mod:mods[key]||1,empty:true};
+    const hits=[];
+    for(let iv=0;iv<=31;iv++){
+      if(calcStat(key,+state.base[key]||0,iv,+state.ev[key]||0,+state.level||1,mods[key]||1)===+state.obs[key]) hits.push(iv);
+    }
+    return {key,label,mod:mods[key]||1,min:hits[0],max:hits[hits.length-1],none:!hits.length};
+  });
+}
+
+function render(){
+  const res=solve();
+  $("rows").innerHTML=res.map(r=>`
+    <div class="grid body">
+      <div style="font-size:14px;font-weight:600">${r.label}${r.mod>1?' <span style="color:var(--mag)">▲</span>':''}${r.mod<1?' <span style="color:var(--cyan)">▼</span>':''}</div>
+      <div><input type="number" data-f="base" data-k="${r.key}" value="${state.base[r.key]}"></div>
+      <div><input type="number" data-f="ev" data-k="${r.key}" value="${state.ev[r.key]}"></div>
+      <div><input type="number" data-f="obs" data-k="${r.key}" value="${state.obs[r.key]}"></div>
+      <div class="ivcell">${r.empty
+        ? '<span style="color:var(--dim);font-size:13px">Preencha o valor da tela</span>'
+        : r.none
+        ? '<span style="color:var(--mag);font-size:13px">Nenhum IV bate — revise base, EV ou natureza</span>'
+        : `<div class="iv" style="color:${r.min===31?'var(--gold)':'var(--text)'}">${r.min===r.max?r.min:r.min+" – "+r.max}${r.min===31&&r.max===31?' <span style="font-size:12px">perfeito</span>':''}</div>
+           <div class="bar"><i class="${r.min===31?'perfect':''}" style="left:${(r.min/31)*100}%;width:${Math.max(((r.max-r.min)/31)*100,3)}%"></i></div>`}</div>
+    </div>`).join("");
+  const perfect=res.filter(r=>r.min===31&&r.max===31).length;
+  $("summary").innerHTML=`IVs confirmados em 31: <span style="color:${perfect>=3?'var(--green)':'var(--gold)'}">${perfect}</span>${state.alpha&&perfect<3?" de 3 — os restantes estão nas faixas acima":""}`;
+  document.querySelectorAll('#rows input').forEach(el=>{
+    el.oninput=()=>{state[el.dataset.f][el.dataset.k]=el.value;render();};
+  });
+}
+
+// --- controles ---
+$("nature").innerHTML=Object.keys(NATURES).map(n=>`<option${n===state.nature?" selected":""}>${n}</option>`).join("");
+$("nature").onchange=e=>{state.nature=e.target.value;render();};
+$("level").oninput=e=>{state.level=e.target.value;render();};
+$("alpha").onchange=e=>{state.alpha=e.target.checked;$("alphaNote").style.display=e.target.checked?"":"none";if(e.target.checked){state.ev.hp=252;}render();};
+$("showRaw").onchange=e=>{$("raw").style.display=e.target.checked?"block":"none";};
+
+function setSpecies(name){
+  state.species=name;$("species").value=name;
+  if(DEX_MAP[name]) state.base={...DEX_MAP[name]};
+  $("sugg").style.display="none";render();
+}
+$("species").oninput=e=>{
+  const q=e.target.value.trim().toLowerCase();
+  state.species=e.target.value;
+  const exact=DEX.find(d=>d[1].toLowerCase()===q);
+  if(exact){state.base={...DEX_MAP[exact[1]]};render();}
+  const list=q?DEX.filter(d=>d[1].toLowerCase().includes(q)).slice(0,8):[];
+  $("sugg").innerHTML=list.map(d=>`<div style="padding:7px 10px;font-size:14px;cursor:pointer;border-bottom:1px solid var(--line)">${d[1]}</div>`).join("");
+  $("sugg").style.display=list.length?"block":"none";
+  [...$("sugg").children].forEach((el,i)=>el.onmousedown=()=>setSpecies(list[i][1]));
+};
+$("species").onblur=()=>setTimeout(()=>$("sugg").style.display="none",150);
+
+// --- OCR ---
+function lev(a,b){
+  const m=[];for(let i=0;i<=b.length;i++)m[i]=[i];
+  for(let j=0;j<=a.length;j++)m[0][j]=j;
+  for(let i=1;i<=b.length;i++)for(let j=1;j<=a.length;j++)
+    m[i][j]=b[i-1]===a[j-1]?m[i-1][j-1]:Math.min(m[i-1][j-1],m[i][j-1],m[i-1][j])+1;
+  return m[b.length][a.length];
+}
+function fuzzy(word,list){
+  let best=null,bd=99;
+  for(const c of list){const d=lev(word.toLowerCase(),c.toLowerCase());if(d<bd){bd=d;best=c;}}
+  return {best,dist:bd};
+}
+function preprocess(img){
+  const scale=Math.min(img.width<1400?3.5:2.5, 2600/img.width>1?2600/img.width:2200/img.width);
+  const w=Math.round(img.width*scale),h=Math.round(img.height*scale);
+  const cv=document.createElement("canvas");cv.width=w;cv.height=h;
+  const cx=cv.getContext("2d");cx.drawImage(img,0,0,w,h);
+  const d=cx.getImageData(0,0,w,h),p=d.data;
+  let min=255,max=0;
+  for(let i=0;i<p.length;i+=4){const g=(p[i]*.299+p[i+1]*.587+p[i+2]*.114)|0;p[i]=p[i+1]=p[i+2]=g;if(g<min)min=g;if(g>max)max=g;}
+  const range=Math.max(max-min,1);
+  // so estica o contraste; corte duro apagava digitos finos em foto escura
+  for(let i=0;i<p.length;i+=4){
+    const g=((p[i]-min)/range)*255;
+    p[i]=p[i+1]=p[i+2]=g;
+  }
+  cx.putImageData(d,0,0);
+  return cv;
+}
+// O texto do jogo e branco (acromatico) e o moire da TV e colorido. Tomando
+// min(R,G,B) o moire desaba e as letras ficam. Otsu escolhe o corte sozinho.
+function preprocessWhite(img){
+  const scale=Math.min(img.width<1400?3.5:2.5, 2600/img.width>1?2600/img.width:2200/img.width);
+  const w=Math.round(img.width*scale),h=Math.round(img.height*scale);
+  const cv=document.createElement("canvas");cv.width=w;cv.height=h;
+  const cx=cv.getContext("2d");cx.drawImage(img,0,0,w,h);
+  const d=cx.getImageData(0,0,w,h),p=d.data;
+  const hist=new Float64Array(256);
+  for(let i=0;i<p.length;i+=4){
+    const m=Math.min(p[i],p[i+1],p[i+2]);
+    p[i]=m;hist[m]++;
+  }
+  // Otsu sobre o canal minimo
+  const total=p.length/4;
+  let sum=0; for(let t=0;t<256;t++) sum+=t*hist[t];
+  let sumB=0,wB=0,best=0,thr=128;
+  for(let t=0;t<256;t++){
+    wB+=hist[t]; if(!wB) continue;
+    const wF=total-wB; if(!wF) break;
+    sumB+=t*hist[t];
+    const mB=sumB/wB, mF=(sum-sumB)/wF, between=wB*wF*(mB-mF)*(mB-mF);
+    if(between>best){best=between;thr=t;}
+  }
+  thr=Math.max(thr,90);
+  for(let i=0;i<p.length;i+=4){
+    const v=p[i]>thr?255:0;
+    p[i]=p[i+1]=p[i+2]=v;
+  }
+  cx.putImageData(d,0,0);
+  return cv;
+}
+
+const cyw=w=>(w.bbox.y0+w.bbox.y1)/2, cxw=w=>(w.bbox.x0+w.bbox.x1)/2;
+
+// Rotulos da tela de status. Ordem importa: os longos sao resolvidos antes dos curtos.
+// PP-OCR entrega "Sp.Atk" colado; o Tesseract entrega "Atk" solto. Aceita as duas formas.
+const LABELS=[["atk",["Attack"],5],["def",["Defense"],6],["spe",["Speed"],4],
+              ["spa",["SpAtk","Atk"],3],["spd",["SpDef","Def"],3]];
+
+// "Sp" solto a esquerda e na mesma linha: confirma que o token curto e Sp.Atk/Sp.Def
+function hasSpPrefix(words,w){
+  const h=w.bbox.y1-w.bbox.y0;
+  return words.some(o=>{
+    if(o===w) return false;
+    if(!/^sp\.?$/i.test(o.text.replace(/[^A-Za-z.]/g,""))) return false;
+    const dx=cxw(w)-cxw(o), dy=Math.abs(cyw(w)-cyw(o));
+    return dx>0&&dx<h*6&&dy<h;
+  });
+}
+function findAnchors(words){
+  const used=new Set(),anchors={};
+  for(const [key,targets,minLen] of LABELS){
+    let best=null,bd=99;
+    for(const w of words){
+      if(used.has(w)) continue;
+      const clean=w.text.replace(/[^A-Za-z]/g,"");
+      for(const target of targets){
+        const short=target.length<=3;
+        if(clean.length>target.length+2) continue;
+        // rotulo curto degradado ("Atk"->"Ak") so entra se houver "Sp" ao lado
+        const min=short&&hasSpPrefix(words,w)?2:Math.min(minLen,target.length);
+        if(clean.length<min) continue;
+        const d=lev(clean.toLowerCase(),target.toLowerCase());
+        const tol=short?(hasSpPrefix(words,w)?1:0):1;
+        if(d<=tol&&d<bd){bd=d;best=w;}
+      }
+    }
+    if(best){used.add(best);anchors[key]=best;}
+  }
+  return anchors;
+}
+
+// Casamento global rotulo <-> numero: cada numero serve um rotulo so, o par mais
+// proximo vence primeiro. Evita que um rotulo roube o numero do vizinho.
+function matchNumbers(words,anchors,w,h){
+  const nums=words.filter(x=>{
+    const t=x.text.replace(/[^0-9]/g,"");
+    return t&&t.length<=3&&!/\//.test(x.text)&&!Object.values(anchors).includes(x);
+  });
+  const pairs=[];
+  for(const [key,anchor] of Object.entries(anchors)){
+    for(const n of nums){
+      const dx=cxw(n)-cxw(anchor), dy=cyw(n)-cyw(anchor);
+      if(dy<-h*0.015||dy>h*0.10) continue;      // numero fica na linha do rotulo ou logo abaixo
+      if(Math.abs(dx)>w*0.10) continue;
+      pairs.push({key,n,d:Math.hypot(dx*1.5,dy)});
+    }
+  }
+  pairs.sort((p,q)=>p.d-q.d);
+  const out={},takenKeys=new Set(),takenNums=new Set();
+  for(const p of pairs){
+    if(takenKeys.has(p.key)||takenNums.has(p.n)) continue;
+    takenKeys.add(p.key);takenNums.add(p.n);
+    out[p.key]=+p.n.text.replace(/[^0-9]/g,"");
+  }
+  return out;
+}
+
+// A tela tem layout fixo: coluna esquerda {Sp.Atk, Sp.Def}, direita {Attack, Defense},
+// Speed embaixo no centro. Com dois rotulos da mesma coluna/linha da para deduzir o que faltou.
+const COL={spa:"spd",spd:"spa",atk:"def",def:"atk"}, ROW={spa:"atk",atk:"spa",spd:"def",def:"spd"};
+function inferBoxes(anchors){
+  const out={...anchors};
+  for(let pass=0;pass<2;pass++) for(const k of ["spa","spd","atk","def"]){
+    if(out[k]) continue;
+    const c=out[COL[k]],r=out[ROW[k]]; if(!c||!r) continue;
+    const h=c.bbox.y1-c.bbox.y0;
+    out[k]={bbox:{x0:c.bbox.x0,x1:c.bbox.x1,y0:cyw(r)-h/2,y1:cyw(r)+h/2},inferred:true,text:"("+k+")"};
+  }
+  if(!out.spe&&out.spd&&out.def){
+    const h=out.spd.bbox.y1-out.spd.bbox.y0;
+    const xc=(cxw(out.spd)+cxw(out.def))/2, y=cyw(out.spd)+h*2.2;
+    out.spe={bbox:{x0:xc-h*1.5,x1:xc+h*1.5,y0:y-h/2,y1:y+h/2},inferred:true,text:"(spe)"};
+  }
+  return out;
+}
+
+// Um stat so pode assumir os valores gerados por IV de 0 a 31. Isso descarta
+// erro de digito do OCR sem depender de confianca.
+function allowedRange(key){
+  const mods=NATURES[state.nature]||{};
+  const b=+state.base[key]||0, ev=+state.ev[key]||0, l=+state.level||1, m=mods[key]||1;
+  const lo=calcStat(key,b,0,ev,l,m), hi=calcStat(key,b,31,ev,l,m);
+  return [Math.min(lo,hi),Math.max(lo,hi)];
+}
+function candidates(str){
+  const d=String(str).replace(/[^0-9]/g,""), out=new Set();
+  for(let i=0;i<d.length;i++) for(let n=1;n<=3&&i+n<=d.length;n++) out.add(+d.slice(i,i+n));
+  return [...out];
+}
+function cropCanvas(src,box,mulW,mulH){
+  const lw=box.x1-box.x0, lh=box.y1-box.y0;
+  const left=Math.max(0,Math.round((box.x0+box.x1)/2-lw*mulW/2));
+  const top=Math.max(0,Math.round(box.y1+lh*0.08));
+  const w=Math.min(src.width-left,Math.round(lw*mulW)), h=Math.min(src.height-top,Math.round(lh*mulH));
+  if(w<10||h<10) return null;
+  const cv=document.createElement("canvas");
+  cv.width=w*3;cv.height=h*3;
+  const cx=cv.getContext("2d");
+  cx.imageSmoothingQuality="high";
+  cx.drawImage(src,left,top,w,h,0,0,cv.width,cv.height);
+  return cv;
+}
+
+function plausibleLevel(raw){
+  let s=String(raw).replace(/[^0-9]/g,"");
+  while(s.length){
+    const n=+s;
+    if(n>=1&&n<=100) return n;
+    s=s.slice(0,-1);          // "216" -> "21", "1005" -> "100"
+  }
+  return null;
+}
+function readLevel(text,words){
+  // "Lv." vira "LM.", "Lu", "L\\/" conforme a fonte e o brilho: aceita 1 letra qualquer
+  const m=text.match(/\bL[^0-9\s]{0,2}\s*(\d{1,4})\b/i);
+  const byText=m&&plausibleLevel(m[1]);
+  if(byText) return byText;
+  // fallback geometrico: numero mais proximo a direita do rotulo "Lv"
+  const anchor=words.find(w=>/^[^A-Za-z0-9]{0,2}L[vyu]/i.test(w.text));
+  if(!anchor) return null;
+  let best=null,bd=Infinity;
+  for(const w of words){
+    if(w===anchor) continue;
+    const n=plausibleLevel(w.text);
+    if(!n) continue;
+    const dx=cxw(w)-cxw(anchor),dy=Math.abs(cyw(w)-cyw(anchor));
+    if(dx<0||dy>(anchor.bbox.y1-anchor.bbox.y0)*1.5) continue;
+    if(dx<bd){bd=dx;best=n;}
+  }
+  return best;
+}
+
+// tesseract.js >=6 nao popula data.words; desce pela arvore de blocos
+function collectWords(data){
+  if(data.words&&data.words.length) return data.words.filter(w=>w.text&&w.text.trim());
+  const out=[];
+  for(const b of data.blocks||[])
+    for(const p of b.paragraphs||[])
+      for(const l of p.lines||[])
+        for(const w of l.words||[]) if(w.text&&w.text.trim()) out.push(w);
+  return out;
+}
+
+// createImageBitmap respeita a orientacao EXIF; sem isso foto de celular
+// (orientation=6) entra deitada e o OCR le lixo
+async function toBitmap(source){
+  if(source instanceof HTMLCanvasElement) return source;
+  if(window.createImageBitmap){
+    try{ return await createImageBitmap(source,{imageOrientation:"from-image"}); }catch(e){}
+  }
+  return await new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=()=>rej(new Error("img"));i.src=URL.createObjectURL(source);});
+}
+
+let lastCanvas=null;
+
+// ---- Motor principal: PaddleOCR PP-OCRv4 via onnxruntime-web ----------------
+// Tesseract foi treinado em documento escaneado e desmonta em foto de TV
+// (moire, brilho, perspectiva). PP-OCR e um modelo de texto de cena: na foto
+// que dava 61 palavras de ruido no Tesseract, ele leu os 6 stats corretos.
+const PADDLE_CDN="https://cdn.jsdelivr.net/npm/@gutenye/ocr-models@1.4.2/assets/";
+let paddle=null, paddleFailed=false, paddleWhy="";
+const ORT_WASM="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.27.0/dist/";
+async function getPaddle(){
+  if(paddle) return paddle;
+  if(paddleFailed) return null;
+  try{
+    if(!window.GutenOcr) throw new Error("ocr-engine.js não carregou — ele precisa estar na MESMA pasta do HTML");
+    // o runtime busca os .wasm por URL; sem isto ele procura ao lado da pagina
+    if(window.ort&&window.ort.env&&window.ort.env.wasm) window.ort.env.wasm.wasmPaths=ORT_WASM;
+    paddle=await window.GutenOcr.create({models:{
+      detectionPath:PADDLE_CDN+"ch_PP-OCRv4_det_infer.onnx",
+      recognitionPath:PADDLE_CDN+"ch_PP-OCRv4_rec_infer.onnx",
+      dictionaryPath:PADDLE_CDN+"ppocr_keys_v1.txt"}});
+    return paddle;
+  }catch(e){
+    console.error("PP-OCR indisponivel:",e);
+    paddleWhy=(e&&e.message)||String(e);
+    paddleFailed=true; return null;
+  }
+}
+
+// PP-OCR devolve LINHAS ("55 24" = Sp.Atk e Attack juntos). O parser trabalha
+// com palavras: fatia a caixa da linha proporcional ao offset de cada token.
+function linesToWords(lines){
+  const out=[];
+  for(const l of lines){
+    const xs=l.box.map(p=>p[0]), ys=l.box.map(p=>p[1]);
+    const x0=Math.min(...xs), x1=Math.max(...xs), y0=Math.min(...ys), y1=Math.max(...ys);
+    const text=l.text||"", n=text.length||1;
+    let i=0;
+    for(const tok of text.split(/\s+/)){
+      if(!tok){i++;continue;}
+      const st=text.indexOf(tok,i); i=st+tok.length;
+      out.push({text:tok,confidence:(l.mean||0)*100,
+        bbox:{x0:x0+(x1-x0)*st/n,x1:x0+(x1-x0)*i/n,y0,y1}});
+    }
+  }
+  return out;
+}
+
+// canvas sem binarizacao: PP-OCR trabalha melhor na imagem natural
+function rawCanvas(img){
+  const scale=Math.min(2400/img.width,2);
+  const cv=document.createElement("canvas");
+  cv.width=Math.round(img.width*scale); cv.height=Math.round(img.height*scale);
+  cv.getContext("2d").drawImage(img,0,0,cv.width,cv.height);
+  return cv;
+}
+
+function setBusy(on,text){
+  const label=$("pickLabel");
+  if(on){label.setAttribute("aria-disabled","true");label.firstChild.textContent=text;}
+  else{label.removeAttribute("aria-disabled");label.firstChild.textContent="Escolher imagem";}
+  $("camBtn").disabled=on;$("shotBtn").disabled=on;
+  $("reReadBtn").disabled=on||!lastCanvas;
+}
+
+async function runOCR(source){
+  const msg=$("msg");
+  setBusy(true,"Carregando OCR...");
+  msg.innerHTML="";
+  try{
+    const img=await toBitmap(source);
+    let words, rawText, canvas, canvases, engine, worker=null;
+
+    setBusy(true,"Carregando motor OCR...");
+    const pp=await getPaddle();
+
+    if(pp){
+      engine="PP-OCRv4";
+      canvas=rawCanvas(img);
+      lastCanvas=canvas;
+      setBusy(true,"Lendo...");
+      const lines=await pp.detect(canvas.toDataURL("image/png"));
+      words=linesToWords(lines);
+      rawText=lines.map(l=>l.text).join("\n");
+      canvases=[canvas];
+    }else{
+      // reserva: modelo nao carregou (sem internet na primeira vez, CDN bloqueada)
+      engine="Tesseract (reserva)";
+      canvas=preprocess(img);
+      lastCanvas=canvas;
+      setBusy(true,"Lendo...");
+      worker=await Tesseract.createWorker("eng");
+      let r=await worker.recognize(canvas);
+      words=collectWords(r.data);
+      rawText=r.data.text;
+      canvases=[canvas];
+      if(Object.keys(findAnchors(words)).length<3){
+        setBusy(true,"Tentando outro filtro...");
+        const alt=preprocessWhite(img);
+        const r2=await worker.recognize(alt);
+        const w2=collectWords(r2.data);
+        canvases.push(alt);
+        if(Object.keys(findAnchors(w2)).length>Object.keys(findAnchors(words)).length){
+          rawText=r2.data.text; words=w2; canvases=[alt,canvas];
+        }else words=words.concat(w2);
+      }
+    }
+    const data={text:rawText};
+    $("raw").value=data.text;
+
+    // Portao de qualidade: com a tela pequena no quadro ou moire de TV o OCR
+    // devolve ruido. Preencher qualquer coisa nesse caso e pior que nao preencher.
+    const letters=words.filter(w=>/[A-Za-z]{3,}/.test(w.text));
+    const meanConf=letters.length?letters.reduce((s,w)=>s+(w.confidence||0),0)/letters.length:0;
+    const probe=findAnchors(words);
+    if(Object.keys(probe).length===0&&meanConf<70){
+      $("raw").value="MOTOR: "+engine+"  PALAVRAS: "+words.length+"  CONFIANCA MEDIA: "+Math.round(meanConf)+
+        "\nNenhum rotulo da tela de status reconhecido.\n--- texto bruto ---\n"+data.text;
+      $("showRaw").checked=true;$("raw").style.display="block";
+      if(worker) await worker.terminate();
+      msg.innerHTML='<div class="err">Imagem ilegível — não alterei nenhum campo. Recorte a área da tela do jogo (botão abaixo da imagem) ou aproxime a câmera: o painel precisa ocupar quase todo o quadro.</div>';
+      setBusy(false);
+      return;
+    }
+
+    const missing=[];
+    // limpa tudo antes: campo nao lido fica vazio, nunca com valor da leitura anterior
+    for(const [k] of STATS){state.obs[k]="";}
+
+    // nivel: o icone de Alpha cola um digito no numero ("21" -> "216"),
+    // entao poda a cauda ate cair na faixa 1-100
+    const lvl=readLevel(data.text,words);
+    if(lvl){state.level=lvl;$("level").value=lvl;} else missing.push("nível");
+
+    // natureza
+    let nat=null;
+    for(const w of words){
+      const clean=w.text.replace(/[^A-Za-z]/g,"");
+      if(clean.length<4) continue;
+      const f=fuzzy(clean,Object.keys(NATURES));
+      if(f.dist===0||(f.dist===1&&clean.length>=4&&(w.confidence==null||w.confidence>=60))){nat=f.best;break;}
+    }
+    if(nat){state.nature=nat;$("nature").value=nat;} else missing.push("natureza");
+
+    // especie
+    let sp=null,spdist=99;
+    for(const w of words){
+      const clean=w.text.replace(/[^A-Za-z]/g,"");
+      if(clean.length<5||NATURES[clean]) continue;
+      const f=fuzzy(clean,DEX.map(d=>d[1]));
+      // exato vale por si; 1 erro so em nome longo E com confianca — senao ruido vira "Seel"
+      const ok=f.dist===0||(f.dist===1&&clean.length>=7&&(w.confidence==null||w.confidence>=60));
+      if(ok&&f.dist<spdist){spdist=f.dist;sp=f.best;}
+    }
+    if(sp) setSpecies(sp); else missing.push("espécie");
+
+    // HP: padrao 63/63 (a barra separa atual e maximo)
+    const hpm=data.text.match(/(\d{1,3})\s*[\/|]\s*(\d{1,3})/);
+    if(hpm) state.obs.hp=Math.max(+hpm[1],+hpm[2]); else missing.push("HP");
+
+    // HP tambem passa pela faixa valida
+    const baseOk=!missing.includes("nível")&&!missing.includes("natureza")&&!missing.includes("espécie");
+    if(state.obs.hp!==""&&baseOk){
+      const [lo,hi]=allowedRange("hp");
+      if(state.obs.hp<lo||state.obs.hp>hi){state.obs.hp="";missing.push("HP (fora da faixa possível)");}
+    }
+
+    // Stats: passada 1 (pagina inteira) + passada 2 (recorte por rotulo, so digitos).
+    // Todo candidato e validado contra a faixa que IV 0-31 permite.
+    const anchors=findAnchors(words);
+    const boxes=inferBoxes(anchors);
+    const pass1=matchNumbers(words,anchors,canvas.width,canvas.height);
+    const votes={};
+    for(const [key] of STATS){ if(key!=="hp") votes[key]={}; }
+    const trusted=!missing.includes("nível")&&!missing.includes("natureza")&&!missing.includes("espécie");
+    const vote=(key,val,weight)=>{
+      if(trusted){
+        const [lo,hi]=allowedRange(key);
+        if(val<lo||val>hi) return;
+      }else if(val<1||val>999) return;
+      votes[key][val]=(votes[key][val]||0)+weight;
+    };
+    for(const [key,val] of Object.entries(pass1)) if(votes[key]) vote(key,val,70);
+
+    setBusy(true,"Conferindo números...");
+    if(worker) await worker.setParameters({tessedit_char_whitelist:"0123456789"});
+    const variants=[[2.4,2.6,"7"],[3.0,3.2,"7"],[2.2,3.4,"11"]];
+    // le um recorte com o motor ativo e devolve o texto
+    const readCrop=async(crop,psm)=>{
+      if(worker){
+        await worker.setParameters({tessedit_pageseg_mode:psm});
+        const r=await worker.recognize(crop);
+        return {text:r.data.text,conf:r.data.confidence};
+      }
+      const ls=await pp.detect(crop.toDataURL("image/png"));
+      return {text:ls.map(l=>l.text).join(" "),conf:ls.length?Math.max(...ls.map(l=>(l.mean||0)*100)):0};
+    };
+    for(const [key,box] of Object.entries(boxes)){
+      if(!votes[key]) continue;
+      let done=false;
+      for(const [mw,mh,psm] of variants){
+        if(done) break;
+        for(const cv of canvases){
+          const crop=cropCanvas(cv,box.bbox,mw,mh);
+          if(!crop) continue;
+          const r=await readCrop(crop,psm);
+          for(const c of candidates(r.text)) vote(key,c,Math.max(r.conf,20));
+          const top=Object.entries(votes[key]).sort((x,y)=>y[1]-x[1])[0];
+          if(top&&top[1]>=200){done=true;break;}   // consenso: para de gastar passada
+        }
+      }
+    }
+    if(worker) await worker.terminate();
+
+    const chosen={};
+    for(const [key,label] of STATS){
+      if(key==="hp") continue;
+      const top=Object.entries(votes[key]).sort((x,y)=>y[1]-x[1])[0];
+      if(top){state.obs[key]=+top[0];chosen[key]=+top[0];} else missing.push(label);
+    }
+    const found=chosen;
+
+    if(state.alpha) state.ev.hp=252;
+    render();
+
+    $("raw").value=
+      "MOTOR: "+engine+(paddleWhy?"  (PP-OCR fora: "+paddleWhy+")":"")+"  |  PALAVRAS: "+words.length+"  |  CANVAS: "+canvas.width+"x"+canvas.height+"\n"+
+      "ROTULOS: "+(Object.keys(boxes).length?Object.entries(boxes).map(([k,v])=>k+"="+(v.inferred?"[inferido]":JSON.stringify(v.text))).join("  "):"nenhum")+"\n"+
+      "VALIDACAO POR FAIXA: "+(trusted?"ligada":"DESLIGADA (espécie/nível/natureza incertos)")+"\n"+
+      "FAIXAS: "+STATS.filter(s=>s[0]!=="hp").map(([k])=>k+":"+allowedRange(k).join("-")).join("  ")+"\n"+
+      "NUMEROS: "+(Object.keys(found).length?JSON.stringify(found):"nenhum")+"\n"+
+      "--- texto bruto ---\n"+data.text;
+    msg.innerHTML=missing.length
+      ? (($("showRaw").checked=true),($("raw").style.display="block"),
+         `<div class="err">Não consegui ler: ${missing.join(", ")}. Preencha à mão e use "Reler imagem"${trusted?"":" — sem espécie/nível/natureza confiáveis eu não valido os números por faixa"}.</div>`)
+      : `<div class="ok">Todos os campos vieram da imagem${trusted?" e passaram na validação por faixa de IV":" (sem validação por faixa — confira os números)"}. Confira antes de confiar.</div>`;
+  }catch(e){
+    console.error(e);
+    $("showRaw").checked=true;$("raw").style.display="block";
+    $("raw").value="ERRO: "+((e&&e.stack)||e)+(paddleWhy?"\n\nPP-OCR indisponível: "+paddleWhy:"");
+    msg.innerHTML=`<div class="err">Falhou: ${e.message==="img"?"não deu para abrir a imagem":((e&&e.message)||e)}. Detalhe no diagnóstico abaixo.</div>`;
+  }finally{
+    setBusy(false);
+  }
+}
+// --- recorte manual ---
+let cropImg=null, cropSel=null, cropDraw=null;
+function showCrop(bitmap){
+  cropImg=bitmap;
+  const cv=$("cropCv"), maxW=Math.min(900,window.innerWidth-72);
+  const s=maxW/bitmap.width;
+  cv.width=Math.round(bitmap.width*s); cv.height=Math.round(bitmap.height*s);
+  cropSel=null; drawCrop();
+  $("cropPanel").hidden=false;
+  $("cropPanel").scrollIntoView({block:"nearest"});
+}
+function drawCrop(){
+  const cv=$("cropCv"), g=cv.getContext("2d");
+  g.drawImage(cropImg,0,0,cv.width,cv.height);
+  if(cropSel){
+    g.fillStyle="rgba(11,16,48,.6)";
+    g.fillRect(0,0,cv.width,cv.height);
+    g.drawImage(cropImg,cropSel.x/cv.width*cropImg.width,cropSel.y/cv.height*cropImg.height,
+      cropSel.w/cv.width*cropImg.width,cropSel.h/cv.height*cropImg.height,
+      cropSel.x,cropSel.y,cropSel.w,cropSel.h);
+    g.strokeStyle="#54E0F0";g.lineWidth=2;g.strokeRect(cropSel.x,cropSel.y,cropSel.w,cropSel.h);
+  }
+}
+function cropPos(e){
+  const cv=$("cropCv"), r=cv.getBoundingClientRect();
+  return {x:(e.clientX-r.left)/r.width*cv.width, y:(e.clientY-r.top)/r.height*cv.height};
+}
+$("cropCv").addEventListener("pointerdown",e=>{
+  e.preventDefault();$("cropCv").setPointerCapture(e.pointerId);
+  const p=cropPos(e); cropDraw=p; cropSel={x:p.x,y:p.y,w:0,h:0}; drawCrop();
+});
+$("cropCv").addEventListener("pointermove",e=>{
+  if(!cropDraw) return;
+  const p=cropPos(e);
+  cropSel={x:Math.min(p.x,cropDraw.x),y:Math.min(p.y,cropDraw.y),
+           w:Math.abs(p.x-cropDraw.x),h:Math.abs(p.y-cropDraw.y)};
+  drawCrop();
+});
+$("cropCv").addEventListener("pointerup",()=>{cropDraw=null;});
+function cropToCanvas(){
+  const cv=$("cropCv"), out=document.createElement("canvas");
+  const sx=cropImg.width/cv.width, sy=cropImg.height/cv.height;
+  if(!cropSel||cropSel.w<20||cropSel.h<20){
+    out.width=cropImg.width;out.height=cropImg.height;
+    out.getContext("2d").drawImage(cropImg,0,0);
+  }else{
+    out.width=Math.round(cropSel.w*sx); out.height=Math.round(cropSel.h*sy);
+    out.getContext("2d").drawImage(cropImg,cropSel.x*sx,cropSel.y*sy,out.width,out.height,0,0,out.width,out.height);
+  }
+  return out;
+}
+$("cropGo").onclick=()=>{$("cropPanel").hidden=true;safeRun(cropToCanvas());};
+$("cropAll").onclick=()=>{cropSel=null;$("cropPanel").hidden=true;safeRun(cropToCanvas());};
+
+async function pickImage(file){
+  try{ showCrop(await toBitmap(file)); }
+  catch(err){ showCrash(err); }
+}
+
+function safeRun(source){
+  try{ runOCR(source).catch(showCrash); }catch(err){ showCrash(err); }
+}
+function showCrash(err){
+  console.error(err);
+  setBusy(false);
+  $("msg").innerHTML=`<div class="err">Erro inesperado: ${err&&err.message?err.message:err}. Os campos continuam editáveis à mão.</div>`;
+}
+$("file").onchange=e=>{if(e.target.files[0]) pickImage(e.target.files[0]);};
+$("nativeCam").onchange=e=>{if(e.target.files[0]) pickImage(e.target.files[0]);};
+
+// --- camera ao vivo ---
+let stream=null;
+async function openCam(){
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:{ideal:"environment"},width:{ideal:1920},height:{ideal:1080}},audio:false
+    });
+    $("video").srcObject=stream;
+    $("camPanel").hidden=false;
+    $("msg").innerHTML="";
+  }catch(err){
+    // sem permissao ou sem suporte (Safari em file://, por exemplo): cai para a camera do sistema
+    $("nativeCamLabel").hidden=false;
+    $("msg").innerHTML='<div class="err">O navegador não liberou a câmera aqui. Use "Abrir câmera" para tirar a foto pelo app do sistema, ou sirva o arquivo por http.</div>';
+  }
+}
+function closeCam(){
+  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
+  $("video").srcObject=null;
+  $("camPanel").hidden=true;
+}
+function shoot(){
+  const v=$("video");
+  if(!v.videoWidth) return;
+  const cv=document.createElement("canvas");
+  cv.width=v.videoWidth;cv.height=v.videoHeight;
+  cv.getContext("2d").drawImage(v,0,0);
+  closeCam();
+  showCrop(cv);
+}
+$("reReadBtn").onclick=()=>{if(lastCanvas) safeRun(lastCanvas);};
+$("camBtn").onclick=openCam;
+$("shotBtn").onclick=shoot;
+$("closeCamBtn").onclick=closeCam;
+window.addEventListener("pagehide",closeCam);
+
+render();
+
+</script>
+</body>
+</html>
