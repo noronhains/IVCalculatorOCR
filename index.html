@@ -86,14 +86,14 @@ input:focus,select:focus{outline:2px solid var(--cyan);outline-offset:1px}
     <div class="row">
       <div class="f" style="position:relative">
         <small>Espécie</small>
-        <input id="species" value="Gastly" placeholder="Nome em inglês" autocomplete="off">
+        <input id="species" value="" placeholder="Nome em inglês" autocomplete="off">
         <div id="sugg" style="position:absolute;z-index:20;left:0;right:0;background:var(--soft);border:1px solid var(--line);border-radius:6px;margin-top:4px;display:none"></div>
       </div>
-      <div class="f" style="max-width:90px"><small>Nível</small><input id="level" type="number" min="1" max="100" value="21"></div>
+      <div class="f" style="max-width:90px"><small>Nível</small><input id="level" type="number" min="1" max="100" value="" placeholder="1-100"></div>
       <div class="f" style="max-width:150px"><small>Natureza</small><select id="nature"></select></div>
-      <label class="chk"><input type="checkbox" id="alpha" checked> Alpha</label>
+      <label class="chk"><input type="checkbox" id="alpha"> Alpha</label>
     </div>
-    <div class="note" id="alphaNote" style="margin-top:10px;color:var(--gold)">Alpha garante 3 IVs em 31 e já vem com EV de HP no máximo.</div>
+    <div class="note" id="alphaNote" style="margin-top:10px;color:var(--gold);display:none">Alpha garante 3 IVs em 31 e já vem com EV de HP no máximo.</div>
   </div>
 
   <div class="table">
@@ -131,11 +131,13 @@ Calm:{spd:1.1,atk:.9},Gentle:{spd:1.1,def:.9},Sassy:{spd:1.1,spe:.9},Careful:{sp
 const DEX_MAP={};
 for(const [num,name,hp,atk,def,spa,spd,spe] of DEX) DEX_MAP[name]={hp,atk,def,spa,spd,spe};
 
+// comeca vazio: espécie, nível, natureza e números saem da imagem (ou da mão do usuário)
+const BLANK=()=>({hp:"",atk:"",def:"",spa:"",spd:"",spe:""});
 const state={
-  level:21,nature:"Brave",species:"Gastly",alpha:true,
-  base:{...DEX_MAP.Gastly},
-  ev:{hp:252,atk:0,def:0,spa:0,spd:0,spe:0},
-  obs:{hp:58,atk:28,def:24,spa:49,spd:24,spe:40}
+  level:"",nature:"Hardy",species:"",alpha:false,
+  base:BLANK(),
+  ev:{hp:0,atk:0,def:0,spa:0,spd:0,spe:0},
+  obs:BLANK()
 };
 
 const $=id=>document.getElementById(id);
@@ -173,7 +175,9 @@ function render(){
            <div class="bar"><i class="${r.min===31?'perfect':''}" style="left:${(r.min/31)*100}%;width:${Math.max(((r.max-r.min)/31)*100,3)}%"></i></div>`}</div>
     </div>`).join("");
   const perfect=res.filter(r=>r.min===31&&r.max===31).length;
-  $("summary").innerHTML=`IVs confirmados em 31: <span style="color:${perfect>=3?'var(--green)':'var(--gold)'}">${perfect}</span>${state.alpha&&perfect<3?" de 3 — os restantes estão nas faixas acima":""}`;
+  $("summary").innerHTML=res.every(r=>r.empty)
+    ? '<span style="color:var(--dim);font-weight:400">Envie a tela do jogo, ou preencha espécie, nível, natureza e os valores da tela à mão.</span>'
+    : `IVs confirmados em 31: <span style="color:${perfect>=3?'var(--green)':'var(--gold)'}">${perfect}</span>${state.alpha&&perfect<3?" de 3 — os restantes estão nas faixas acima":""}`;
   document.querySelectorAll('#rows input').forEach(el=>{
     el.oninput=()=>{state[el.dataset.f][el.dataset.k]=el.value;render();};
   });
@@ -183,7 +187,7 @@ function render(){
 $("nature").innerHTML=Object.keys(NATURES).map(n=>`<option${n===state.nature?" selected":""}>${n}</option>`).join("");
 $("nature").onchange=e=>{state.nature=e.target.value;render();};
 $("level").oninput=e=>{state.level=e.target.value;render();};
-$("alpha").onchange=e=>{state.alpha=e.target.checked;$("alphaNote").style.display=e.target.checked?"":"none";if(e.target.checked){state.ev.hp=252;}render();};
+$("alpha").onchange=e=>{state.alpha=e.target.checked;$("alphaNote").style.display=e.target.checked?"":"none";state.ev.hp=e.target.checked?252:0;render();};
 $("showRaw").onchange=e=>{$("raw").style.display=e.target.checked?"block":"none";};
 
 function setSpecies(name){
@@ -196,6 +200,7 @@ $("species").oninput=e=>{
   state.species=e.target.value;
   const exact=DEX.find(d=>d[1].toLowerCase()===q);
   if(exact){state.base={...DEX_MAP[exact[1]]};render();}
+  else if(!q){state.base=BLANK();render();}   // campo limpo: nao deixa base da especie anterior
   const list=q?DEX.filter(d=>d[1].toLowerCase().includes(q)).slice(0,8):[];
   $("sugg").innerHTML=list.map(d=>`<div style="padding:7px 10px;font-size:14px;cursor:pointer;border-bottom:1px solid var(--line)">${d[1]}</div>`).join("");
   $("sugg").style.display=list.length?"block":"none";
